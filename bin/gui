@@ -1,6 +1,7 @@
 #!/bin/bash
 
-declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2024-01-08 - 03")
+# If not a release, ver set to: "YYYY-MM-DD::04", where `04` - incremental change version for date
+declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="v0.1.0")
 opts[bin]="${opts[tools]}/bin"
 opts[cache]="${opts[tools]}/cache"
 
@@ -75,7 +76,7 @@ EOF
 }
 
 function main() {
-  while opt=$(zenity --width=500 --height=400 --title="$1" --text="$prompt" --ok-label="Run" --cancel-label="Quit" --list --column="Name" --column="Description" --column="value" --hide-column=3 --print-column=3 "${options[@]}");
+  while opt=$(zenity --width=500 --height=400 --title="$1 [${opts[ver]}]" --text="$prompt" --ok-label="Run" --cancel-label="Quit" --list --column="Name" --column="Description" --column="value" --hide-column=3 --print-column=3 "${options[@]}");
   do
     case "$opt" in
       1)
