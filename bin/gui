@@ -1,0 +1,256 @@
+#!/bin/bash
+
+declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2024-01-08 - 03")
+opts[bin]="${opts[tools]}/bin"
+opts[cache]="${opts[tools]}/cache"
+
+function download() {
+  if [[ $1 =~ ^https?:\/\/.+$ ]]; then
+    [[ ! -e "$2" ]] && curl -sSL $1 -o $2 --create-dirs
+  else
+    local org="$1"
+    local file="$2"
+    local ver="$3"
+    local dest="$4"
+    local part="$([[ $ver =~ ^v?\.?[-\.0-9]*$ ]] && echo 'releases/download' || echo 'raw')"
+
+    if [[ ! -e "$dest" ]] && zenity --question --no-wrap --width=300 --title="Not Installed, Install?" --text="Org: $org\nFile: $file\nVer: $ver"; then
+       curl -sSL "https://github.com/$org/$part/$ver/$file" -o $dest --create-dirs
+       chmod +x $dest
+    fi
+  fi
+}
+
+function install() {
+  if ! flatpak list --app | grep "$2" && zenity --question --no-wrap --width=300 --title='Not Installed, Install?' --text="$1"; then
+    flatpak install --user -y --noninteractive flathub "$2"
+  fi
+}
+
+function run() {
+  if [[ "$1" =~ ^[^\/][\.[:alnum:]_-]+[^\/]$ ]]; then
+    flatpak list --app | grep "$1" && {
+      flatpak run --command="$2" --file-forwarding "$1" @@u %u @@;
+      exit $?;
+    }
+  else
+    [[ -x "$1" ]] && { "$@"; exit $?; }
+  fi
+}
+
+function edit() {
+  sed -i 's#'$1'=.*#'$1'="'$2'"#' $3
+}
+
+function init() {
+  function put_shortcut() {
+    declare -A file=([label]="$1" [size]=512 [url]="$2")
+    file[base_name]=`echo ${file[label]} | tr '[:upper:]' '[:lower:]' | tr ' ' '-'`
+    file[with_ext]="${file[base_name]}.png"
+    file[full_path]="${opts[cache]}/${file[with_ext]}"
+
+    if [[ ! -f "$HOME/.local/share/icons/hicolor/${file[size]}x${file[size]}/apps/${file[with_ext]}" ]]; then
+      download ${file[url]} ${file[full_path]}
+      xdg-icon-resource install --novendor --context apps --size ${file[size]} ${file[full_path]}
+    fi
+
+    if [[ ! -f "$HOME/Desktop/${file[label]}.desktop" ]]; then
+      cat <<EOF>> "$HOME/Desktop/${file[label]}.desktop"
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=${file[label]}
+Terminal=false
+Type=Application
+Exec=${opts[bin]}/gui '${file[label]}'
+Icon=${file[base_name]}
+Categories=Utils;
+Comment=Various Tools for Steam Deck
+StartupNotify=true
+EOF
+     fi
+  }
+
+  put_shortcut 'Deck Tools' 'https://deckbrew.xyz/static/icon-45ca1f5aea376a9ad37e92db906f283e.png'
+  put_shortcut 'Game Launchers' 'https://hugolispector.com/images/apps/controlly.png'
+}
+
+function main() {
+  while opt=$(zenity --width=500 --height=400 --title="$1" --text="$prompt" --ok-label="Run" --cancel-label="Quit" --list --column="Name" --column="Description" --column="value" --hide-column=3 --print-column=3 "${options[@]}");
+  do
+    case "$opt" in
+      1)
+        local script="${opts[bin]}/cleaner.sh"
+
+        download 'scawp/Steam-Deck.Shader-Cache-Killer' 'zShaderCacheKiller.sh' 'b2f3925' $script
+        edit 'conf_dir' ${opts[tools]} $script
+        edit 'tmp_dir' ${opts[cache]} $script
+        run $script
+      ;;
+      2)
+        local script="${opts[bin]}/mover.sh"
+
+        download 'scawp/Steam-Deck.Shader-Cache-Killer' 'zShaderCacheMover.sh' 'b2f3925' $script
+        edit 'tmp_dir' ${opts[cache]} $script
+        run $script
+      ;;
+      3)
+        declare -A sd=([home]='/home/deck' [microSD]='/run/media/mmcblk0p1' [title]='Steam Deck Backup')
+        mkdir ${sd[title]} && cd "$_" && printf "# $_" > 'README.md'
+
+
+        # EmuDeck Settings and Game Saves
+        mkdir EmuDeck
+        rsync -P -a "${sd[home]}/emudeck/settings.sh" 'EmuDeck/config/'
+        rsync -P -L -azr "${sd[microSD]}/Emulation/saves/" 'EmuDeck/saves'
+
+
+        # Chiaki Settings
+        mkdir Chiaki
+        rsync -P -a "${sd[home]}/.var/app/io.github.streetpea.Chiaki4deck/config/Chiaki/Chiaki.conf" 'Chiaki/config.conf'
+        rsync -P -a "${sd[home]}/.var/app/io.github.streetpea.Chiaki4deck/config/Chiaki/Chiaki-launcher.sh" 'Chiaki/launcher.sh'
+        rsync -P -a "${sd[home]}/.steam/root/controller_base/templates/chiaki_controller_config.vdf" 'Chiaki/controller-config.vdf'
+
+        # Decky Loader and Plugins Settings
+        mkdir -p Decky/plugins/{SteamGridDB,PowerTools,CSSLoader,TabMaster}
+        rsync -P -a "${sd[home]}/homebrew/settings/loader.json" 'Decky/config.json'
+
+        rsync -P -a "${sd[home]}/homebrew/settings/decky-steamgriddb/steamgriddb.json" 'Decky/plugins/SteamGridDB/config.json'
+        rsync -P -azr --no-relative --files-from=<(find ${sd[home]}/.local/share/Steam/userdata -name shortcuts.vdf -print) / 'Decky/plugins/SteamGridDB/'
+        rsync -P -azr --no-relative --files-from=<(find ${sd[home]}/.local/share/Steam/userdata -name grid -type d -print) / 'Decky/plugins/SteamGridDB/'
+
+        find ${sd[home]}/homebrew/themes/* -maxdepth 0 -type d -exec basename {} \; | jq -R | jq -s > 'Decky/plugins/CSSLoader/list.json'
+        rsync -P -azr -m --include="*/" --include="config_USER.json" --exclude="*" "${sd[home]}/homebrew/themes/" 'Decky/plugins/CSSLoader/'
+
+        rsync -P -a "${sd[home]}/homebrew/settings/TabMaster/settings.json" 'Decky/plugins/TabMaster/config.json'
+
+        find ${sd[home]}/.config/powertools -regex '.*[0-9]+\.json' -exec jq -r '{(input_filename | gsub(".*/|\\.json$"; "")): .name}' {} \; | jq -s 'add' > 'Decky/plugins/PowerTools/list.json'
+        rsync -P -azr --exclude={'limits_cache.*','.version'} "${sd[home]}/.config/powertools/" 'Decky/plugins/PowerTools'
+
+
+        # System Settings and Compatibility Tools (/home/deck/.local/share/Steam/userdata/42705380/250900/remote)
+        mkdir -p System/{StartupMovies,SSH,Icons,Menus,Desktop,CompatTools}
+        rsync -P -L -azr "${sd[home]}/.config/AnimationChanger/downloads/" 'System/StartupMovies'
+        rsync -P -L -azr "${sd[home]}/.steam/root/config/uioverrides/movies/" 'System/StartupMovies'
+
+        find "${sd[home]}/.steam/root/compatibilitytools.d" -type f -regex '.*/GE-Proton[0-9\-]*/version' -exec cat {} + | sed -E "s|.*GE-Proton([0-9-]*)|\1|g" > 'System/CompatTools/ProtonGE.ver'
+        rsync -P -a "${sd[home]}/.steam/root/compatibilitytools.d/SteamTinkerLaunch/VERSION.txt" 'System/CompatTools/SteamTinkerLaunch.ver'
+
+        rsync -P -L -azr "${sd[home]}/.ssh/" 'System/SSH'
+        rsync -P -L -azr "${sd[home]}/.local/share/icons/" 'System/Icons'
+        rsync -P -L -azr "${sd[home]}/.config/menus/" 'System/Menus'
+        rsync -P -L -azr "${sd[home]}/Desktop/" 'System/Desktop'
+
+
+        # Create archive
+        7z a -t7z "${sd[title]}.7z" * -r -mx9 -sdel -scsUTF-8
+      ;;
+      4)
+        local bin="${opts[bin]}/cryo"
+        local log="${opts[cache]}/cryo.log"
+        local tmp="$HOME/.cryo_utilities"
+
+        download 'CryoByte33/steam-deck-utilities' 'cryo_utilities' '2.0-77' $bin
+        if [ -x "$bin" ]; then
+          declare -gx FYNE_SCALE=0.25
+
+          {
+            mkdir -p $tmp
+            while kill -0 $$; do sleep 5; done
+            cat $tmp/*.log >> $log
+            rm -rf $tmp
+          } & $bin gui
+
+          exit $?;
+        fi
+      ;;
+      5)
+        local id='net.davidotek.pupgui2'
+
+        install 'ProtonUp-Qt' $id
+        run $id $id
+      ;;
+      6)
+        local script="${opts[cache]}/decky_install.sh"
+
+        download 'SteamDeckHomebrew/decky-installer' 'user_install_script.sh' 'v2.10.10' $script
+        run $script
+      ;;
+      7)
+        install 'Disk Usage Analyzer' 'org.gnome.baobab'
+        install 'Flatpak Permissions Editor' 'com.github.tchx84.Flatseal'
+        install 'Steam Metadata Editor' 'io.github.tralph3.Steam_Metadata_Editor'
+
+        break;
+      ;;
+      8)
+        if `systemctl is-active --quiet sshd`; then
+          zenity --info --no-wrap --width=200 --title='Stopping SSHD...' --text='In 3...2...1...'
+          sudo /usr/bin/systemctl stop sshd.service
+        else
+          if `sudo /usr/bin/systemctl start sshd.service`; then
+            local usr=`whoami`
+            local ip=`ip addr show wlan0 | grep -Po 'inet \K[\d.]+'`
+
+            zenity --info --no-wrap --width=200 --title='SSHD Started' --text="Connect to sftp://$usr@$ip:22"
+          else
+            zenity --error --no-wrap --width=200 --title='Failed to Start SSHD' --text='Please try again'
+          fi
+        fi
+
+        break;
+      ;;
+      9)
+        local id='com.heroicgameslauncher.hgl'
+
+        install 'Heroic Launcher' $id
+        run $id 'heroic-run'
+      ;;
+      10)
+        local id='io.github.streetpea.Chiaki4deck'
+
+        if ! flatpak list --app | grep "$id" && zenity --question --no-wrap --width=300 --title='Not Installed, Install?' --text="$id"; then
+          flatpak install --user -y --noninteractive flathub $id
+          run $id 'psn-account-id'
+          # flatpak run --command=psn-account-id io.github.streetpea.Chiaki4deck
+          # bash <(curl -sLo- https://raw.githubusercontent.com/streetpea/chiaki4deck/main/scripts/gen-launcher.sh)
+        fi
+      ;;
+      11)
+        local id='io.github.philipk.boilr'
+
+        install 'BoilR' $id # download 'PhilipK/BoilR' 'linux_BoilR_small' 'v.1.9.1' $bin
+        run $id 'boilr'
+      ;;
+      *) zenity --error --text="Invalid option. Try another one." ;;
+    esac
+  done
+}
+
+init
+case "$1" in
+  'Deck Tools')
+    options=()
+    options+=("Cache Cleaner" "Clean ShaderCache/CompatData" 1)
+    options+=("Cache Mover" "Move ShaderCache/CompatData" 2)
+    options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 3)
+    options+=("Cryo Utils" "Run Various Performance Optimizations" 4)
+    options+=("Proton GE" "Install Proton version /w Community Fixes" 5)
+    options+=("Decky Loader" "Install/Verify DeckyLoader" 6)
+    options+=("System Tools" "Install Must Have Tools" 7)
+    options+=("File Transfer" "Start/Stop SSHD Daemon for File Transfer" 8)
+
+    main "$1"
+  ;;
+  'Game Launchers')
+    options=()
+    options+=("Heroic Games" "GOG and Epic Integration w/ Steam" 9)
+    options+=("Chiaki" "PS4/PS5 Games Streaming on Deck" 10)
+    options+=("BoilR" "Games Logo/Icon Downloader for Non-Steam Game Launchers" 11)
+
+    main "$1"
+  ;;
+  *) # No Args Passed
+    zenity --error --width=400 --text="Positional argument 'mode' with unknown value: $1\nExiting..."
+    exit 1;
+  ;;
+esac
