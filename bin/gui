@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # If not a release, ver set to: "YYYY-MM-DD::04", where `04` - incremental change version for date
-declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="v0.1.0")
+declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2025-02-01::05")
 opts[bin]="${opts[tools]}/bin"
 opts[cache]="${opts[tools]}/cache"
 
@@ -10,14 +10,18 @@ function download() {
     [[ ! -e "$2" ]] && curl -sSL $1 -o $2 --create-dirs
   else
     local org="$1"
-    local file="$2"
     local ver="$3"
+    local file=${2//'#VER#'/$ver}
     local dest="$4"
+    local parent="$(dirname $dest)"
     local part="$([[ $ver =~ ^v?\.?[-\.0-9]*$ ]] && echo 'releases/download' || echo 'raw')"
 
     if [[ ! -e "$dest" ]] && zenity --question --no-wrap --width=300 --title="Not Installed, Install?" --text="Org: $org\nFile: $file\nVer: $ver"; then
-       curl -sSL "https://github.com/$org/$part/$ver/$file" -o $dest --create-dirs
-       chmod +x $dest
+      curl -sSL "https://github.com/$org/$part/$ver/$file" -o "$([[ "$file" == *.zip ]] && echo $dest.zip || echo $dest)" --create-dirs
+      if [[ "$file" == *.zip ]]; then
+        unzip -p "$dest.zip" > $dest && rm -f "$dest.zip"
+      fi
+      chmod +x $dest
     fi
   fi
 }
@@ -80,39 +84,31 @@ function main() {
   do
     case "$opt" in
       1)
-        local script="${opts[bin]}/cleaner.sh"
-
-        download 'scawp/Steam-Deck.Shader-Cache-Killer' 'zShaderCacheKiller.sh' 'b2f3925' $script
-        edit 'conf_dir' ${opts[tools]} $script
-        edit 'tmp_dir' ${opts[cache]} $script
-        run $script
-      ;;
-      2)
-        local script="${opts[bin]}/mover.sh"
-
-        download 'scawp/Steam-Deck.Shader-Cache-Killer' 'zShaderCacheMover.sh' 'b2f3925' $script
-        edit 'tmp_dir' ${opts[cache]} $script
-        run $script
-      ;;
-      3)
         declare -A sd=([home]='/home/deck' [microSD]='/run/media/mmcblk0p1' [title]='Steam Deck Backup')
-        mkdir ${sd[title]} && cd "$_" && printf "# $_" > 'README.md'
+        mkdir "${sd[home]}/${sd[title]}" && cd "${sd[home]}/${sd[title]}" && printf "# ${sd[title]}" > 'README.md'
 
 
-        # EmuDeck Settings and Game Saves
-        mkdir EmuDeck
-        rsync -P -a "${sd[home]}/emudeck/settings.sh" 'EmuDeck/config/'
-        rsync -P -L -azr "${sd[microSD]}/Emulation/saves/" 'EmuDeck/saves'
+        # Ludusavi Settings and Games Saves
+        mkdir Ludusavi
+        rsync -P -L -azr --exclude={'cache.yaml','manifest.yaml'} "${sd[home]}/.var/app/com.github.mtkennerly.ludusavi/config/ludusavi/" 'Ludusavi'
+        # flatpak run --cwd=/home/deck --nosocket=fallback-x11 --socket=x11 --env="RUST_LOG=ludusavi=trace" -vv com.github.mtkennerly.ludusavi backup --force --api >/home/deck/.var/app/com.github.mtkennerly.ludusavi/config/ludusavi/error.log 2>&1
+        # ${opts[bin]}/ludusavi --config=${sd[home]}/.var/app/com.github.mtkennerly.ludusavi/config/ludusavi backup --path="${sd[home]}/${sd[title]}/Saves" --force
+
+
+        # EmuDeck Settings and Games Saves
+        mkdir -p EmuDeck/Saves
+        rsync -P -a "${sd[home]}/emudeck/settings.sh" 'EmuDeck/Config/'
+        find Saves/ -maxdepth 1 -type d -name 'EmuDeck - *' -exec mv -t EmuDeck/Saves/ -- {} +
 
 
         # Chiaki Settings
         mkdir Chiaki
-        rsync -P -a "${sd[home]}/.var/app/io.github.streetpea.Chiaki4deck/config/Chiaki/Chiaki.conf" 'Chiaki/config.conf'
-        rsync -P -a "${sd[home]}/.var/app/io.github.streetpea.Chiaki4deck/config/Chiaki/Chiaki-launcher.sh" 'Chiaki/launcher.sh'
-        rsync -P -a "${sd[home]}/.steam/root/controller_base/templates/chiaki_controller_config.vdf" 'Chiaki/controller-config.vdf'
+        rsync -P -azr "${sd[home]}/.var/app/io.github.streetpea.Chiaki4deck/config/Chiaki/" 'Chiaki'
+        rsync -P -a "${sd[home]}/.steam/root/controller_base/templates/chiaki_controller_config.vdf" 'Chiaki'
+
 
         # Decky Loader and Plugins Settings
-        mkdir -p Decky/plugins/{SteamGridDB,PowerTools,CSSLoader,TabMaster}
+        mkdir -p Decky/plugins/{SteamGridDB,PowerTools,CSSLoader,TabMaster,ProtonDB}
         rsync -P -a "${sd[home]}/homebrew/settings/loader.json" 'Decky/config.json'
 
         rsync -P -a "${sd[home]}/homebrew/settings/decky-steamgriddb/steamgriddb.json" 'Decky/plugins/SteamGridDB/config.json'
@@ -124,12 +120,14 @@ function main() {
 
         rsync -P -a "${sd[home]}/homebrew/settings/TabMaster/settings.json" 'Decky/plugins/TabMaster/config.json'
 
+        rsync -P -a "${sd[home]}/homebrew/settings/protondb-decky/settings.json" 'Decky/plugins/ProtonDB/config.json'
+
         find ${sd[home]}/.config/powertools -regex '.*[0-9]+\.json' -exec jq -r '{(input_filename | gsub(".*/|\\.json$"; "")): .name}' {} \; | jq -s 'add' > 'Decky/plugins/PowerTools/list.json'
         rsync -P -azr --exclude={'limits_cache.*','.version'} "${sd[home]}/.config/powertools/" 'Decky/plugins/PowerTools'
 
 
         # System Settings and Compatibility Tools (/home/deck/.local/share/Steam/userdata/42705380/250900/remote)
-        mkdir -p System/{StartupMovies,SSH,Icons,Menus,Desktop,CompatTools}
+        mkdir -p System/{StartupMovies,SSH,Icons,Menus,Launchers,Desktop,CompatTools}
         rsync -P -L -azr "${sd[home]}/.config/AnimationChanger/downloads/" 'System/StartupMovies'
         rsync -P -L -azr "${sd[home]}/.steam/root/config/uioverrides/movies/" 'System/StartupMovies'
 
@@ -138,14 +136,15 @@ function main() {
 
         rsync -P -L -azr "${sd[home]}/.ssh/" 'System/SSH'
         rsync -P -L -azr "${sd[home]}/.local/share/icons/" 'System/Icons'
+        rsync -P -L -azr "${sd[home]}/.local/share/applications/" 'System/Launchers'
         rsync -P -L -azr "${sd[home]}/.config/menus/" 'System/Menus'
         rsync -P -L -azr "${sd[home]}/Desktop/" 'System/Desktop'
 
 
         # Create archive
-        7z a -t7z "${sd[title]}.7z" * -r -mx9 -sdel -scsUTF-8
+        7z a -t7z "${sd[title]}.7z" * -r -mx9 -scsUTF-8
       ;;
-      4)
+      2)
         local bin="${opts[bin]}/cryo"
         local log="${opts[cache]}/cryo.log"
         local tmp="$HOME/.cryo_utilities"
@@ -164,26 +163,29 @@ function main() {
           exit $?;
         fi
       ;;
-      5)
+      3)
         local id='net.davidotek.pupgui2'
 
         install 'ProtonUp-Qt' $id
         run $id $id
       ;;
-      6)
+      4)
         local script="${opts[cache]}/decky_install.sh"
 
         download 'SteamDeckHomebrew/decky-installer' 'user_install_script.sh' 'v2.10.10' $script
         run $script
       ;;
-      7)
+      5)
         install 'Disk Usage Analyzer' 'org.gnome.baobab'
         install 'Flatpak Permissions Editor' 'com.github.tchx84.Flatseal'
         install 'Steam Metadata Editor' 'io.github.tralph3.Steam_Metadata_Editor'
 
+        # Flatpak Version crashes when using from Terminal (# install 'Ludusavi' 'com.github.mtkennerly.ludusavi')
+        download 'mtkennerly/ludusavi' 'ludusavi-#VER#-linux.zip' 'v0.22.0' "${opts[bin]}/ludusavi"
+
         break;
       ;;
-      8)
+      6)
         if `systemctl is-active --quiet sshd`; then
           zenity --info --no-wrap --width=200 --title='Stopping SSHD...' --text='In 3...2...1...'
           sudo /usr/bin/systemctl stop sshd.service
@@ -194,19 +196,19 @@ function main() {
 
             zenity --info --no-wrap --width=200 --title='SSHD Started' --text="Connect to sftp://$usr@$ip:22"
           else
-            zenity --error --no-wrap --width=200 --title='Failed to Start SSHD' --text='Please try again'
+            zenity --error --no-wrap --width=200 --title='Failed to Start SSHD' --text='Please try again or type manually:\n  sudo /usr/bin/systemctl start sshd.service'
           fi
         fi
 
         break;
       ;;
-      9)
+      7)
         local id='com.heroicgameslauncher.hgl'
 
         install 'Heroic Launcher' $id
         run $id 'heroic-run'
       ;;
-      10)
+      8)
         local id='io.github.streetpea.Chiaki4deck'
 
         if ! flatpak list --app | grep "$id" && zenity --question --no-wrap --width=300 --title='Not Installed, Install?' --text="$id"; then
@@ -216,10 +218,10 @@ function main() {
           # bash <(curl -sLo- https://raw.githubusercontent.com/streetpea/chiaki4deck/main/scripts/gen-launcher.sh)
         fi
       ;;
-      11)
+      9)
         local id='io.github.philipk.boilr'
 
-        install 'BoilR' $id # download 'PhilipK/BoilR' 'linux_BoilR_small' 'v.1.9.1' $bin
+        install 'BoilR' $id # download 'PhilipK/BoilR' 'linux_BoilR' 'v.1.9.4' "${opts[bin]}/BoilR"
         run $id 'boilr'
       ;;
       *) zenity --error --text="Invalid option. Try another one." ;;
@@ -231,22 +233,20 @@ init
 case "$1" in
   'Deck Tools')
     options=()
-    options+=("Cache Cleaner" "Clean ShaderCache/CompatData" 1)
-    options+=("Cache Mover" "Move ShaderCache/CompatData" 2)
-    options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 3)
-    options+=("Cryo Utils" "Run Various Performance Optimizations" 4)
-    options+=("Proton GE" "Install Proton version /w Community Fixes" 5)
-    options+=("Decky Loader" "Install/Verify DeckyLoader" 6)
-    options+=("System Tools" "Install Must Have Tools" 7)
-    options+=("File Transfer" "Start/Stop SSHD Daemon for File Transfer" 8)
+   options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 1)
+    options+=("Cryo Utils" "Run Various Performance Optimizations" 2)
+    options+=("Proton GE" "Install Proton version /w Community Fixes" 3)
+    options+=("Decky Loader" "Install/Verify DeckyLoader" 4)
+    options+=("System Tools" "Install Must Have Tools" 5)
+    options+=("File Transfer" "Start/Stop SSHD Daemon for File Transfer" 6)
 
     main "$1"
   ;;
   'Game Launchers')
     options=()
-    options+=("Heroic Games" "GOG and Epic Integration w/ Steam" 9)
-    options+=("Chiaki" "PS4/PS5 Games Streaming on Deck" 10)
-    options+=("BoilR" "Games Logo/Icon Downloader for Non-Steam Game Launchers" 11)
+    options+=("Heroic Games" "GOG and Epic Integration w/ Steam" 7)
+    options+=("Chiaki" "PS4/PS5 Games Streaming on Deck" 8)
+    options+=("BoilR" "Games Logo/Icon Downloader for Non-Steam Game Launchers" 9)
 
     main "$1"
   ;;
