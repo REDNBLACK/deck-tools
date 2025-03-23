@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # If not a release, ver set to: "YYYY-MM-DD::04", where `04` - incremental change version for date
-declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2025-02-01::05")
+declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2025-03-23::01")
 opts[bin]="${opts[tools]}/bin"
 opts[cache]="${opts[tools]}/cache"
 
@@ -13,15 +13,24 @@ function download() {
     local ver="$3"
     local file=${2//'#VER#'/$ver}
     local dest="$4"
+    local multifile="$5" # Если множество файлов, а не единственный выполняемый в архиве
     local parent="$(dirname $dest)"
     local part="$([[ $ver =~ ^v?\.?[-\.0-9]*$ ]] && echo 'releases/download' || echo 'raw')"
 
     if [[ ! -e "$dest" ]] && zenity --question --no-wrap --width=300 --title="Not Installed, Install?" --text="Org: $org\nFile: $file\nVer: $ver"; then
       curl -sSL "https://github.com/$org/$part/$ver/$file" -o "$([[ "$file" == *.zip ]] && echo $dest.zip || echo $dest)" --create-dirs
       if [[ "$file" == *.zip ]]; then
-        unzip -p "$dest.zip" > $dest && rm -f "$dest.zip"
+        zenity --info --no-wrap --width=200 --title='Downloading Script' --text="$file \n $dest \n $dest.zip"
+        if [ "$multifile" = "true" ]; then
+          unzip -d $dest "$dest.zip"
+        else
+          unzip -p "$dest.zip" > $dest
+        fi
+        rm -f "$dest.zip"
       fi
-      chmod +x $dest
+      if [[ -e "$dest" ]] && [[ ! -d "$dest" ]]; then
+        chmod +x $dest
+      fi
     fi
   fi
 }
@@ -39,7 +48,14 @@ function run() {
       exit $?;
     }
   else
-    [[ -x "$1" ]] && { "$@"; exit $?; }
+    if [[ ! -x "$1" ]] && zenity --question --no-wrap --width=300 --title='Installed, but Misses -X Persmission. Force Set Flag Now?' --text="$(basename $1)"; then
+      chmod +x "$1"
+    fi
+    if [[ "$2" = 'Terminal' ]]; then
+      konsole -e "$1"
+    else
+      [[ -x "$1" ]] && { "$@"; exit $?; }
+    fi
   fi
 }
 
@@ -145,23 +161,11 @@ function main() {
         7z a -t7z "${sd[title]}.7z" * -r -mx9 -scsUTF-8
       ;;
       2)
-        local bin="${opts[bin]}/cryo"
-        local log="${opts[cache]}/cryo.log"
-        local tmp="$HOME/.cryo_utilities"
+        local data="${opts[cache]}/BTRFS"
+        local script="$data/SteamDeckBTRFS.sh"
 
-        download 'CryoByte33/steam-deck-utilities' 'cryo_utilities' '2.0-77' $bin
-        if [ -x "$bin" ]; then
-          declare -gx FYNE_SCALE=0.25
-
-          {
-            mkdir -p $tmp
-            while kill -0 $$; do sleep 5; done
-            cat $tmp/*.log >> $log
-            rm -rf $tmp
-          } & $bin gui
-
-          exit $?;
-        fi
+        download 'mi5hmash/SteamDeckBTRFS' 'SteamDeckBTRFS_#VER#.zip' 'v2.0.10' $data true
+        run $script 'Terminal'
       ;;
       3)
         local id='net.davidotek.pupgui2'
@@ -172,16 +176,18 @@ function main() {
       4)
         local script="${opts[cache]}/decky_install.sh"
 
-        download 'SteamDeckHomebrew/decky-installer' 'user_install_script.sh' 'v2.10.10' $script
+        download 'SteamDeckHomebrew/decky-installer' 'user_install_script.sh' 'v1.9.0' $script
         run $script
       ;;
       5)
+        # Disk Tools
         install 'Disk Usage Analyzer' 'org.gnome.baobab'
         install 'Flatpak Permissions Editor' 'com.github.tchx84.Flatseal'
-        install 'Steam Metadata Editor' 'io.github.tralph3.Steam_Metadata_Editor'
+        install 'KDiskMark Perfomance Analyzer' 'io.github.jonmagon.kdiskmark'
 
-        # Flatpak Version crashes when using from Terminal (# install 'Ludusavi' 'com.github.mtkennerly.ludusavi')
-        download 'mtkennerly/ludusavi' 'ludusavi-#VER#-linux.zip' 'v0.22.0' "${opts[bin]}/ludusavi"
+        # Steam Tools
+        install 'Steam Metadata Editor' 'io.github.tralph3.Steam_Metadata_Editor'
+        install 'Ludusavi Steam Save Manager' 'com.github.mtkennerly.ludusavi'
 
         break;
       ;;
@@ -190,13 +196,43 @@ function main() {
           zenity --info --no-wrap --width=200 --title='Stopping SSHD...' --text='In 3...2...1...'
           sudo /usr/bin/systemctl stop sshd.service
         else
-          if `sudo /usr/bin/systemctl start sshd.service`; then
-            local usr=`whoami`
-            local ip=`ip addr show wlan0 | grep -Po 'inet \K[\d.]+'`
+          function start() {
+            if [[ -z "$1" ]]; then
+              local subtitle='SSHD Started'
+              sudo /usr/bin/systemctl start sshd.service
+              local status=$?
+            else
+              local subtitle='SSHD Started (SUDO typed manually)'
+              echo "$passwd" | sudo -S /usr/bin/systemctl start sshd.service
+              local status=$?
+            fi
 
-            zenity --info --no-wrap --width=200 --title='SSHD Started' --text="Connect to sftp://$usr@$ip:22"
-          else
-            zenity --error --no-wrap --width=200 --title='Failed to Start SSHD' --text='Please try again or type manually:\n  sudo /usr/bin/systemctl start sshd.service'
+            if [[ $status -eq 0 ]]; then
+              local usr=`whoami`
+              local ip=`ip addr show wlan0 | grep -Po 'inet \K[\d.]+'`
+
+              zenity --info --no-wrap --width=200 --title=$subtitle --text="Connect to sftp://$usr@$ip:22"
+              echo 0; exit 0;
+            else
+              echo 2; exit 2;
+            fi
+          }
+
+          ## Try to Recover If sshd Not Available Without Sudo
+          if [[ `start` -ne 0 ]]; then
+            local passwd=$(zenity --forms --width=300 --window-icon=error --title='Failed to Start SSHD' --text='Please Type Your SUDO Password Manually to Retry' --separator="," --add-password="Your SUDO password")
+
+            ## Fail If Provided Sudo Passsword is Empty
+            if [[ -z "$passwd" ]]; then
+              zenity --error --no-wrap --width=200 --window-icon=error --title='Failed to Start SSHD' --text='No SUDO Password Provided, Aborting'
+              exit 1
+            fi
+
+            ## Fail If Provided Sudo Passsword Invalid
+            if [[ `start "$passwd"` -ne 0 ]]; then
+              zenity --error --no-wrap --width=200 --window-icon=error --title='Failed to Start SSHD' --text='Wrong SUDO Password Provided, Aborting'
+              exit 1
+            fi
           fi
         fi
 
@@ -233,8 +269,8 @@ init
 case "$1" in
   'Deck Tools')
     options=()
-   options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 1)
-    options+=("Cryo Utils" "Run Various Performance Optimizations" 2)
+    options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 1)
+    options+=("SD BTRFS" "Install Patch to support BTRFS formatted microSD cards" 2)
     options+=("Proton GE" "Install Proton version /w Community Fixes" 3)
     options+=("Decky Loader" "Install/Verify DeckyLoader" 4)
     options+=("System Tools" "Install Must Have Tools" 5)
