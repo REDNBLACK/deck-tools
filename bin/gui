@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # If not a release, ver set to: "YYYY-MM-DD::04", where `04` - incremental change version for date
-declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2025-04-01::01")
+declare -A opts=([tools]="$HOME/.config/DeckTools" [ver]="2025-04-01::10")
 opts[bin]="${opts[tools]}/bin"
 opts[cache]="${opts[tools]}/cache"
 
@@ -228,18 +228,83 @@ function main() {
         run $script 'Terminal'
       ;;
       3)
+        declare -A dedup=(
+          [db]="${HOME}/.config/DeckTools/data/rmlint.json"
+          [workdir]='/tmp'
+          [output]='/tmp/rmlint.json'
+          [sh]='/tmp/rmlint.sh'
+          [microSD]=$(realpath /run/media/mmcblk0p1)
+        )
+
+        cd ${dedup[workdir]}
+        local passwd=$(zenity --forms --width=300 --window-icon=info --title='[rmlint] Root Password' --text='Please Type Your SUDO Password Manually' --separator="," --add-password="Your SUDO password")
+        if [[ -z "$passwd" ]]; then
+            zenity --error --no-wrap --width=200 --window-icon=error --title='[rmlint] Root Password' --text='No SUDO Password Provided, Aborting'
+            exit 1
+        fi
+
+        konsole --noclose --hide-tabbar --hide-menubar -e bash -c "echo '[rmlint] Open Console' && tty > ${dedup[workdir]}/rmlint.pipe" &
+        until [ -f "${dedup[workdir]}/rmlint.pipe" ]
+        do
+          sleep 1
+        done
+        exec 1>$(cat "${dedup[workdir]}/rmlint.pipe")
+
+        pacman -Q rmlint
+        if [[ $? -ne 0 ]] && zenity --question --no-wrap --width=300 --title='[rmlint] Not Installed. Install?' --text="rmlint package"; then
+            echo "[rmlint] Installing..."
+            echo "$passwd" | sudo -S steamos-readonly disable
+            echo "$passwd" | sudo -S pacman -Syy --noconfirm
+            echo "$passwd" | sudo -S pacman -S archlinux-keyring --noconfirm
+            echo "$passwd" | sudo -S pacman -Syu --noconfirm
+            echo "$passwd" | sudo -S pacman -S rmlint --noconfirm
+            echo "$passwd" | sudo -S pacman -Scc --noconfirm
+            echo "$passwd" | sudo -S steamos-readonly enable
+        fi
+
+        if [[ -f "${dedup[db]}" ]]; then
+            echo "[rmlint] Found DB, restoring..."
+            cp "${dedup[db]}" "${dedup[output]}"
+            echo "$passwd" | sudo -S chown root:root "${dedup[output]}"
+        fi
+
+        if zenity --question --no-wrap --width=300 --title='[rmlint] Run Analysis Now?' --text="For ${dedup[microSD]}"; then
+          echo "[rmlint] Starting Analysis..."
+          echo "$passwd" | sudo -S rmlint --progress --hidden --types="duplicates" --config=sh:handler=clone --xattr ${dedup[microSD]}
+
+          if [[ -f "${dedup[output]}" ]]; then
+              echo "[rmlint] Saving DB..."
+              cp "${dedup[output]}" "${dedup[db]}"
+              echo "$passwd" | sudo -S chown deck:deck "${dedup[db]}"
+          fi
+        fi
+
+        if [[ -f "${dedup[sh]}" ]] && zenity --question --no-wrap --width=300 --title='[rmlint] Apply Deduplication?' --text="For ${dedup[microSD]}"; then
+            # -d Do not ask before running
+            # -x Keep rmlint.sh; do not autodelete it
+            # -k Keep the timestamp of directories when removing duplicates
+            # -r Allow deduplication of files on read-only btrfs snapshots
+            echo "[rmlint] Starting Deduplication..."
+            echo "$passwd" | sudo -S "${dedup[sh]}" -d -x -r -k
+        fi
+
+        echo "[rmlint] Cleanup..."
+        find ${dedup[workdir]} -depth -maxdepth 1 -iname "rmlint*" -print | xargs sudo -p "$passwd" rm -vf
+        unset passwd dedup
+      ;;
+      4)
         local id='net.davidotek.pupgui2'
 
         install 'ProtonUp-Qt' $id
         run $id $id
       ;;
-      4)
+      5)
         local script="${opts[cache]}/decky_install.sh"
 
         download 'SteamDeckHomebrew/decky-installer' 'user_install_script.sh' 'v1.9.0' $script
         run $script
       ;;
-      5)
+      6)
         # Disk Tools
         install 'Disk Usage Analyzer' 'org.gnome.baobab'
         install 'Flatpak Permissions Editor' 'com.github.tchx84.Flatseal'
@@ -251,7 +316,7 @@ function main() {
 
         break;
       ;;
-      6)
+      7)
         if `systemctl is-active --quiet sshd`; then
           zenity --info --no-wrap --width=200 --title='Stopping SSHD...' --text='In 3...2...1...'
           sudo /usr/bin/systemctl stop sshd.service
@@ -298,13 +363,13 @@ function main() {
 
         break;
       ;;
-      7)
+      8)
         local id='com.heroicgameslauncher.hgl'
 
         install 'Heroic Launcher' $id
         run $id 'heroic-run'
       ;;
-      8)
+      9)
         local id='io.github.streetpea.Chiaki4deck'
 
         if ! flatpak list --app | grep "$id" && zenity --question --no-wrap --width=300 --title='Not Installed, Install?' --text="$id"; then
@@ -314,7 +379,7 @@ function main() {
           # bash <(curl -sLo- https://raw.githubusercontent.com/streetpea/chiaki4deck/main/scripts/gen-launcher.sh)
         fi
       ;;
-      9)
+      10)
         local id='io.github.philipk.boilr'
 
         install 'BoilR' $id # download 'PhilipK/BoilR' 'linux_BoilR' 'v.1.9.4' "${opts[bin]}/BoilR"
@@ -330,19 +395,20 @@ case "$1" in
   'Deck Tools')
     options=()
     options+=("Backup Tool" "Backup Console, Plugins, Settings and Games Saves" 1)
-    options+=("SD BTRFS" "Install Patch to support BTRFS formatted microSD cards" 2)
-    options+=("Proton GE" "Install Proton version /w Community Fixes" 3)
-    options+=("Decky Loader" "Install/Verify DeckyLoader" 4)
-    options+=("System Tools" "Install Must Have Tools" 5)
-    options+=("File Transfer" "Start/Stop SSHD Daemon for File Transfer" 6)
+    options+=("Install BTRFS" "Install Patch to support BTRFS formatted microSD cards" 2)
+    options+=("Dedup BTRFS" "Run CoW Deduplication for BTRFS formatted microSD card" 3)
+    options+=("Proton GE" "Install Proton version /w Community Fixes" 4)
+    options+=("Decky Loader" "Install/Verify DeckyLoader" 5)
+    options+=("System Tools" "Install Must Have Tools" 6)
+    options+=("File Transfer" "Start/Stop SSHD Daemon for File Transfer" 7)
 
     main "$1"
   ;;
   'Game Launchers')
     options=()
-    options+=("Heroic Games" "GOG and Epic Integration w/ Steam" 7)
-    options+=("Chiaki" "PS4/PS5 Games Streaming on Deck" 8)
-    options+=("BoilR" "Games Logo/Icon Downloader for Non-Steam Game Launchers" 9)
+    options+=("Heroic Games" "GOG and Epic Integration w/ Steam" 8)
+    options+=("Chiaki" "PS4/PS5 Games Streaming on Deck" 9)
+    options+=("BoilR" "Games Logo/Icon Downloader for Non-Steam Game Launchers" 10)
 
     main "$1"
   ;;
